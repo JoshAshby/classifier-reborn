@@ -2,11 +2,14 @@
 # Copyright:: Copyright (c) 2005 Lucas Carlson
 # License::   LGPL
 
-require_relative 'category_namer'
+require 'fast_stemmer'
+require 'stopwords'
 
 module ClassifierReborn
   class Bayes
     CategoryNotFoundError = Class.new(StandardError)
+
+    attr_accessor :threshold
 
     # The class can be created with one or more categories, each of which will be
     # initialized and given a training method. E.g.,
@@ -17,29 +20,21 @@ module ClassifierReborn
     #   auto_categorize:  false  When true, enables ability to dynamically declare a category
     #   enable_threshold: false  When true, enables a threshold requirement for classifition
     #   threshold:        0.0    Default threshold, only used when enabled
-    def initialize(*args)
+    def initialize *args, language: 'en', auto_categorize: false, enable_threshold: false, threshold: 0.0
       @categories = {}
-      options = { language:         'en',
-                  auto_categorize:  false,
-                  enable_threshold: false,
-                  threshold:        0.0
-                }
+
       args.flatten.each do |arg|
-        if arg.is_a?(Hash)
-          options.merge!(arg)
-        else
-          add_category(arg)
-        end
+        add_category arg
       end
 
       @total_words         = 0
-      @category_counts     = Hash.new(0)
-      @category_word_count = Hash.new(0)
+      @category_counts     = {}
+      @category_word_count = {}
 
-      @language            = options[:language]
-      @auto_categorize     = options[:auto_categorize]
-      @enable_threshold    = options[:enable_threshold]
-      @threshold           = options[:threshold]
+      @language            = language
+      @auto_categorize     = auto_categorize
+      @enable_threshold    = enable_threshold
+      @threshold           = threshold
     end
 
     # Provides a general training method for all categories specified in Bayes#new
@@ -49,19 +44,15 @@ module ClassifierReborn
     #     b.train "that", "That text"
     #     b.train "The other", "The other text"
     def train(category, text)
-      category = CategoryNamer.prepare_name(category)
-
       # Add the category dynamically or raise an error
-      unless @categories.key?(category)
-        if @auto_categorize
-          add_category(category)
-        else
-          raise CategoryNotFoundError, "Cannot train; category #{category} does not exist"
-        end
+      add_category(category) if @auto_categorize
+
+      unless @categories.has_key?(category)
+        fail CategoryNotFoundError, "Cannot train; category #{ category } does not exist"
       end
 
       @category_counts[category] += 1
-      Hasher.word_hash(text, @language).each do |word, count|
+      word_hash(text).each do |word, count|
         @categories[category][word] += count
         @category_word_count[category] += count
         @total_words += count
@@ -76,12 +67,14 @@ module ClassifierReborn
     #     b.train :this, "This text"
     #     b.untrain :this, "This text"
     def untrain(category, text)
-      category = CategoryNamer.prepare_name(category)
       @category_counts[category] -= 1
-      Hasher.word_hash(text, @language).each do |word, count|
+
+      word_hash(text).each do |word, count|
         next if @total_words < 0
+
         orig = @categories[category][word] || 0
         @categories[category][word] -= count
+
         if @categories[category][word] <= 0
           @categories[category].delete(word)
           count = orig
@@ -97,20 +90,26 @@ module ClassifierReborn
     #    =>  {"Uninteresting"=>-12.6997928013932, "Interesting"=>-18.4206807439524}
     # The largest of these scores (the one closest to 0) is the one picked out by #classify
     def classifications(text)
+      # TODO:XXX:TODO (ashby) : This can be something like an inject
       score = {}
-      word_hash = Hasher.word_hash(text, @language)
+
+      word_hash_cache = word_hash(text)
       training_count = @category_counts.values.reduce(:+).to_f
+
       @categories.each do |category, category_words|
         score[category.to_s] = 0
         total = (@category_word_count[category] || 1).to_f
-        word_hash.each do |word, _count|
+
+        word_hash_cache.each do |word, _count|
           s = category_words.key?(word) ? category_words[word] : 0.1
           score[category.to_s] += Math.log(s / total)
         end
+
         # now add prior probability for the category
         s = @category_counts.key?(category) ? @category_counts[category] : 0.1
         score[category.to_s] += Math.log(s / training_count)
       end
+
       score
     end
 
@@ -119,7 +118,7 @@ module ClassifierReborn
     #    b.classify "I hate bad words and you"
     #    =>  ['Uninteresting', -4.852030263919617]
     def classify_with_score(text)
-      (classifications(text).sort_by { |a| -a[1] })[0]
+      classifications(text).sort_by{ |a| -a[1] }.first
     end
 
     # Return the classification without the score
@@ -129,19 +128,13 @@ module ClassifierReborn
       result
     end
 
-    # Retrieve the current threshold value
-    attr_reader :threshold
-
-    # Dynamically set the threshold value
-    attr_writer :threshold
-
     # Dynamically enable threshold for classify results
-    def enable_threshold
+    def enable_threshold!
       @enable_threshold = true
     end
 
     # Dynamically disable threshold for classify results
-    def disable_threshold
+    def disable_threshold!
       @enable_threshold = false
     end
 
@@ -155,31 +148,12 @@ module ClassifierReborn
       !@enable_threshold
     end
 
-    # Provides training and untraining methods for the categories specified in Bayes#new
-    # For example:
-    #     b = ClassifierReborn::Bayes.new 'This', 'That', 'the_other'
-    #     b.train_this "This text"
-    #     b.train_that "That text"
-    #     b.untrain_that "That text"
-    #     b.train_the_other "The other text"
-    def method_missing(name, *args)
-      cleaned_name = name.to_s.gsub(/(un)?train_([\w]+)/, '\2')
-      category = CategoryNamer.prepare_name(cleaned_name)
-      if @categories.key? category
-        args.each { |text| eval("#{Regexp.last_match(1)}train(category, text)") }
-      elsif name.to_s =~ /(un)?train_([\w]+)/
-        raise StandardError, "No such category: #{category}"
-      else
-        super # raise StandardError, "No such method: #{name}"
-      end
-    end
-
     # Provides a list of category names
     # For example:
     #     b.categories
     #     =>   ['This', 'That', 'the_other']
     def categories # :nodoc:
-      @categories.keys.collect(&:to_s)
+      @categories.keys
     end
 
     # Allows you to add categories to the classifier.
@@ -191,9 +165,27 @@ module ClassifierReborn
     # more criteria than the trained selective categories. In short,
     # try to initialize your categories at initialization.
     def add_category(category)
-      @categories[CategoryNamer.prepare_name(category)] ||= Hash.new(0)
+      @categories[category] ||= {}
     end
 
-    alias_method :append_category, :add_category
+    private
+
+    def stopword_filter
+      @filter ||= Stopwords::Snowball::Filter.new @language
+    end
+
+    # Return a Hash of strings => ints. Each value is the stemmed version of a
+    # word, with the value being its frequency in the document so long as it
+    # isn't punctuation, a stopword or a very short word.
+    def word_hash str
+      str.gsub(/[^\p{WORD}\s]/, '').downcase.split.inject({}) do |memo, word|
+        next memo unless word.length > 2
+        next memo if stopword_filter.stopword? word
+
+        memo[word.stem] += 1
+
+        memo
+      end
+    end
   end
 end

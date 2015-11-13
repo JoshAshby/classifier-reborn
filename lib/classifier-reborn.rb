@@ -25,6 +25,5 @@
 # License::   LGPL
 
 require 'rubygems'
-require_relative 'classifier-reborn/category_namer'
 require_relative 'classifier-reborn/bayes'
 require_relative 'classifier-reborn/lsi'

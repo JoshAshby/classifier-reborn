@@ -17,10 +17,10 @@ case ARGV[0]
 when 'add'
   case ARGV[1].downcase
   when 'interesting'
-    m.system.train_interesting File.open(ARGV[2]).read
+    m.system.train 'interesting', File.open(ARGV[2]).read
     puts "#{ARGV[2]} has been classified as interesting"
   when 'uninteresting'
-    m.system.train_uninteresting File.open(ARGV[2]).read
+    m.system.train 'uninteresting', File.open(ARGV[2]).read
     puts "#{ARGV[2]} has been classified as uninteresting"
   else
     puts 'Invalid category: choose between interesting and uninteresting'
