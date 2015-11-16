@@ -28,8 +28,8 @@ module ClassifierReborn
       end
 
       @total_words         = 0
-      @category_counts     = {}
-      @category_word_count = {}
+      @category_counts     = Hash.new(0)
+      @category_word_count = Hash.new(0)
 
       @language            = language
       @auto_categorize     = auto_categorize
@@ -43,7 +43,7 @@ module ClassifierReborn
     #     b.train :this, "This text"
     #     b.train "that", "That text"
     #     b.train "The other", "The other text"
-    def train(category, text)
+    def train category, text
       # Add the category dynamically or raise an error
       add_category(category) if @auto_categorize
 
@@ -53,6 +53,7 @@ module ClassifierReborn
 
       @category_counts[category] += 1
       word_hash(text).each do |word, count|
+        @categories[category][word] ||= 0
         @categories[category][word] += count
         @category_word_count[category] += count
         @total_words += count
@@ -66,7 +67,7 @@ module ClassifierReborn
     #     b = ClassifierReborn::Bayes.new 'This', 'That', 'the_other'
     #     b.train :this, "This text"
     #     b.untrain :this, "This text"
-    def untrain(category, text)
+    def untrain category, text
       @category_counts[category] -= 1
 
       word_hash(text).each do |word, count|
@@ -89,41 +90,39 @@ module ClassifierReborn
     #    b.classifications "I hate bad words and you"
     #    =>  {"Uninteresting"=>-12.6997928013932, "Interesting"=>-18.4206807439524}
     # The largest of these scores (the one closest to 0) is the one picked out by #classify
-    def classifications(text)
-      # TODO:XXX:TODO (ashby) : This can be something like an inject
-      score = {}
-
-      word_hash_cache = word_hash(text)
+    def classifications text
+      word_hash_cache = word_hash text
       training_count = @category_counts.values.reduce(:+).to_f
 
-      @categories.each do |category, category_words|
-        score[category.to_s] = 0
+      @categories.inject({}) do |memo, (category, category_words)|
+        score = 0
         total = (@category_word_count[category] || 1).to_f
 
         word_hash_cache.each do |word, _count|
           s = category_words.key?(word) ? category_words[word] : 0.1
-          score[category.to_s] += Math.log(s / total)
+          score += Math.log(s / total)
         end
 
         # now add prior probability for the category
-        s = @category_counts.key?(category) ? @category_counts[category] : 0.1
-        score[category.to_s] += Math.log(s / training_count)
-      end
+        s = @category_counts[category] || 0.1
+        score += Math.log(s / training_count)
 
-      score
+        memo[category] = score
+        memo
+      end
     end
 
     # Returns the classification of the provided +text+, which is one of the
     # categories given in the initializer along with the score. E.g.,
     #    b.classify "I hate bad words and you"
     #    =>  ['Uninteresting', -4.852030263919617]
-    def classify_with_score(text)
+    def classify_with_score text
       classifications(text).sort_by{ |a| -a[1] }.first
     end
 
     # Return the classification without the score
-    def classify(text)
-      result, score = classify_with_score(text)
+    def classify text
+      result, score = classify_with_score text
       result = nil if score < @threshold || score == Float::INFINITY if threshold_enabled?
       result
     end
@@ -164,7 +163,7 @@ module ClassifierReborn
     # result in an undertrained category that will tend to match
     # more criteria than the trained selective categories. In short,
     # try to initialize your categories at initialization.
-    def add_category(category)
+    def add_category category
       @categories[category] ||= {}
     end
 
@@ -178,7 +177,7 @@ module ClassifierReborn
     # word, with the value being its frequency in the document so long as it
     # isn't punctuation, a stopword or a very short word.
     def word_hash str
-      str.gsub(/[^\p{WORD}\s]/, '').downcase.split.inject({}) do |memo, word|
+      str.gsub(/[^\p{WORD}\s]/, '').downcase.split.inject(Hash.new(0)) do |memo, word|
         next memo unless word.length > 2
         next memo if stopword_filter.stopword? word
 

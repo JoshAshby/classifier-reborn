@@ -1,6 +1,7 @@
 # encoding: utf-8
 
-require File.dirname(__FILE__) + '/../test_helper'
+require_relative '../test_helper'
+
 class BayesianTest < Test::Unit::TestCase
   def setup
     @classifier = ClassifierReborn::Bayes.new 'Interesting', 'Uninteresting'
