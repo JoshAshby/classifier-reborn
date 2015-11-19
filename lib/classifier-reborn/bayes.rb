@@ -44,11 +44,13 @@ module ClassifierReborn
     #     b.train "that", "That text"
     #     b.train "The other", "The other text"
     def train category, text
-      # Add the category dynamically or raise an error
-      add_category(category) if @auto_categorize
+      category = category.to_sym
 
-      unless @categories.has_key?(category)
-        fail CategoryNotFoundError, "Cannot train; category #{ category } does not exist"
+      # Add the category dynamically or raise an error
+      add_category category if @auto_categorize
+
+      unless @categories.has_key? category
+        fail CategoryNotFoundError, "Cannot train model; Category #{ category } does not exist"
       end
 
       @category_counts[category] += 1
@@ -68,6 +70,8 @@ module ClassifierReborn
     #     b.train :this, "This text"
     #     b.untrain :this, "This text"
     def untrain category, text
+      category = category.to_sym
+
       @category_counts[category] -= 1
 
       word_hash(text).each do |word, count|
@@ -99,7 +103,7 @@ module ClassifierReborn
         total = (@category_word_count[category] || 1).to_f
 
         word_hash_cache.each do |word, _count|
-          s = category_words.key?(word) ? category_words[word] : 0.1
+          s = category_words[word] || 0.1
           score += Math.log(s / total)
         end
 
@@ -164,7 +168,7 @@ module ClassifierReborn
     # more criteria than the trained selective categories. In short,
     # try to initialize your categories at initialization.
     def add_category category
-      @categories[category] ||= {}
+      @categories[category.to_sym] ||= {}
     end
 
     private
@@ -177,11 +181,11 @@ module ClassifierReborn
     # word, with the value being its frequency in the document so long as it
     # isn't punctuation, a stopword or a very short word.
     def word_hash str
-      str.gsub(/[^\p{WORD}\s]/, '').downcase.split.inject(Hash.new(0)) do |memo, word|
-        next memo unless word.length > 2
+      str.gsub(/[^\w\s]/, '').downcase.split.inject(Hash.new(0)) do |memo, word|
+        next memo if word.length < 2
         next memo if stopword_filter.stopword? word
 
-        memo[word.stem] += 1
+        memo[word.stem.to_sym] += 1
 
         memo
       end
